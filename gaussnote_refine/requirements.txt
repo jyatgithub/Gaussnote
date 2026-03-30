@@ -1,0 +1,6 @@
+torch
+numpy
+librosa
+soundfile
+mido
+mir_eval

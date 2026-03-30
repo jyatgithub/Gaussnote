@@ -1,0 +1,1 @@
+"""Gaussian ellipsoid refinement package."""
