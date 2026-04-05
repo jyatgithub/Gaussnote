@@ -100,9 +100,9 @@ def print_epoch(epoch, train_loss, val_summary, lr, elapsed):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pkl-dir", default=os.environ.get("PKL_DIR", "./bytedance_preds"))
-    parser.add_argument("--cache-dir", default="./data/refine_cache")
-    parser.add_argument("--output-dir", default="./gaussnote_refine_outputs")
+    parser.add_argument("--pkl-dir", default=os.environ.get("PKL_DIR", "./yourdir/yourfile"))
+    parser.add_argument("--cache-dir", default="./yourdir/yourfile")
+    parser.add_argument("--output-dir", default="./yourdir/yourfile")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--overwrite-cache", action="store_true")

@@ -59,18 +59,18 @@ Basic run:
 
 ```bash
 python -m gaussnote_refine.train \
-  --pkl-dir ./bytedance_preds \
-  --cache-dir ./refine_cache \
-  --output-dir ./gaussnote_refine_outputs
+  --pkl-dir ./yourdir/yourfile \
+  --cache-dir ./yourdir/yourfile \
+  --output-dir ./yourdir/yourfile
 ```
 
 Adapter-based variant:
 
 ```bash
 python -m gaussnote_refine.train \
-  --pkl-dir ./bytedance_preds \
-  --cache-dir ./refine_cache \
-  --output-dir ./gaussnote_refine_outputs \
+  --pkl-dir ./yourdir/yourfile \
+  --cache-dir ./yourdir/yourfile \
+  --output-dir ./yourdir/yourfile \
   --model-variant adapter
 ```
 

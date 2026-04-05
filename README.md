@@ -37,7 +37,7 @@ pip install -r gaussnote_refine/requirements.txt
 Train or evaluate the refinement module on a directory of coarse AMT note proposals:
 
 ```bash
-python -m gaussnote_refine.train --pkl-dir ./bytedance_preds --output-dir ./gaussnote_refine_outputs
+python -m gaussnote_refine.train --pkl-dir ./yourdir/yourfile --output-dir ./yourdir/yourfile
 ```
 
 For more details, see [gaussnote_refine/README.md](./gaussnote_refine/README.md).
