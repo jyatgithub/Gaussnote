@@ -1,4 +1,5 @@
 import csv
+import json
 import math
 import os
 import pickle
@@ -143,7 +144,14 @@ def build_predictions(
     return pred_by_piece
 
 
-def compute_loss_terms(refined_params, gt_params, renderer, patch, loss_variant: str = "base"):
+def compute_loss_terms(
+    refined_params,
+    gt_params,
+    renderer,
+    patch,
+    loss_variant: str = "base",
+    use_reconstruction_loss: bool = True,
+):
     pred_onset = refined_params[:, 0] - refined_params[:, 2]
     pred_offset = refined_params[:, 0] + refined_params[:, 2]
     gt_onset = gt_params[:, 0] - gt_params[:, 2]
@@ -156,27 +164,40 @@ def compute_loss_terms(refined_params, gt_params, renderer, patch, loss_variant:
     rendered = renderer(refined_params)
     recon_target = patch[:, 0]
     if loss_variant == "contour":
-        time_contour = patch[:, 1].clamp(0.0, 1.0)
-        freq_grad = torch.abs(recon_target[:, 1:] - recon_target[:, :-1])
-        freq_grad = torch.nn.functional.pad(freq_grad, (0, 0, 0, 1))
-        weight = 1.0 + 2.0 * time_contour + 1.0 * freq_grad
-        loss_recon = (((rendered - recon_target) ** 2) * weight).mean()
-        loss_tail = torch.nn.functional.smooth_l1_loss(
-            (rendered * weight).sum(dim=1),
-            (recon_target * weight).sum(dim=1),
-        )
+        if use_reconstruction_loss:
+            time_contour = patch[:, 1].clamp(0.0, 1.0)
+            freq_grad = torch.abs(recon_target[:, 1:] - recon_target[:, :-1])
+            freq_grad = torch.nn.functional.pad(freq_grad, (0, 0, 0, 1))
+            weight = 1.0 + 2.0 * time_contour + 1.0 * freq_grad
+            loss_recon = (((rendered - recon_target) ** 2) * weight).mean()
+            loss_tail = torch.nn.functional.smooth_l1_loss(
+                (rendered * weight).sum(dim=1),
+                (recon_target * weight).sum(dim=1),
+            )
+        else:
+            loss_recon = torch.zeros((), device=rendered.device)
+            loss_tail = torch.zeros((), device=rendered.device)
         total = (
             2.0 * loss_onset
             + 1.75 * loss_offset
             + 0.5 * loss_mu
             + 0.75 * loss_sigma
-            + 0.15 * loss_recon
-            + 0.05 * loss_tail
+            + (0.15 * loss_recon if use_reconstruction_loss else 0.0)
+            + (0.05 * loss_tail if use_reconstruction_loss else 0.0)
         )
     else:
-        loss_recon = torch.nn.functional.mse_loss(rendered, recon_target)
+        if use_reconstruction_loss:
+            loss_recon = torch.nn.functional.mse_loss(rendered, recon_target)
+        else:
+            loss_recon = torch.zeros((), device=rendered.device)
         loss_tail = torch.zeros((), device=rendered.device)
-        total = 2.0 * loss_onset + 1.5 * loss_offset + 0.5 * loss_mu + 0.5 * loss_sigma + 0.1 * loss_recon
+        total = (
+            2.0 * loss_onset
+            + 1.5 * loss_offset
+            + 0.5 * loss_mu
+            + 0.5 * loss_sigma
+            + (0.1 * loss_recon if use_reconstruction_loss else 0.0)
+        )
     return total, {
         "loss_total": float(total.item()),
         "loss_onset": float(loss_onset.item()),
@@ -230,3 +251,14 @@ def save_results_table(rows: List[Dict], summary: Dict[str, float], output_csv: 
         writer.writeheader()
         writer.writerows(rows)
         writer.writerow(summary_row)
+
+
+def save_ablation_json(output_json: str, ablation: str, summary: Dict[str, float]) -> None:
+    payload = {
+        "ablation": ablation,
+        "note_precision": float(summary["note_p"]),
+        "note_recall": float(summary["note_r"]),
+        "note_f1": float(summary["note_f1"]),
+    }
+    with open(output_json, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)

@@ -34,11 +34,29 @@ class PatchBackbone(nn.Module):
 
 
 class RefinementNet(nn.Module):
-    def __init__(self, patch_size: int = 32, context_dim: int = 0, use_adapter: bool = False):
+    def __init__(
+        self,
+        patch_size: int = 32,
+        context_dim: int = 0,
+        use_adapter: bool = False,
+        ablation: str = "none",
+        drop_patch_embedding: bool = False,
+        drop_ellipsoid_embedding: bool = False,
+        drop_context_embedding: bool = False,
+        disable_param_gate: bool = False,
+    ):
         super().__init__()
         self.patch_size = patch_size
         self.context_dim = context_dim
         self.use_adapter = use_adapter
+        self.ablation = ablation
+        self.use_patch_embedding = ablation != "A1" and not drop_patch_embedding
+        self.use_ellipsoid_embedding = ablation != "A2" and not drop_ellipsoid_embedding
+        self.use_context_embedding = ablation != "A5" and not drop_context_embedding
+        self.use_param_gate = ablation != "A3" and not disable_param_gate
+        self.patch_dim = 96 * 4 * 4
+        self.param_dim = 64
+        self.context_feat_dim = 64
         self.backbone = PatchBackbone(in_channels=2)
         self.param_mlp = nn.Sequential(
             nn.Linear(6, 64),
@@ -53,8 +71,15 @@ class RefinementNet(nn.Module):
                 nn.Linear(64, 64),
                 nn.GELU(),
             )
+            fusion_in = 0
+            if self.use_patch_embedding:
+                fusion_in += self.patch_dim
+            if self.use_ellipsoid_embedding:
+                fusion_in += self.param_dim
+            if self.use_context_embedding:
+                fusion_in += self.context_feat_dim
             self.shared_fusion = nn.Sequential(
-                nn.Linear(96 * 4 * 4 + 64 + 64, 256),
+                nn.Linear(fusion_in, 256),
                 nn.GELU(),
                 nn.Linear(256, 256),
                 nn.GELU(),
@@ -62,21 +87,34 @@ class RefinementNet(nn.Module):
             self.adapter = nn.Sequential(
                 nn.Linear(256, 256),
                 nn.GELU(),
-                nn.Linear(256, 96 * 4 * 4),
+                nn.Linear(256, self.patch_dim),
                 nn.Tanh(),
             )
-            self.gate_head = nn.Sequential(
-                nn.Linear(256, 128),
-                nn.GELU(),
-                nn.Linear(128, 6),
-            )
-            head_in = 256 + 96 * 4 * 4 + 64 + 64
+            if self.use_param_gate:
+                self.gate_head = nn.Sequential(
+                    nn.Linear(256, 128),
+                    nn.GELU(),
+                    nn.Linear(128, 6),
+                )
+            else:
+                self.gate_head = None
+            head_in = 256
+            if self.use_patch_embedding:
+                head_in += self.patch_dim
+            if self.use_ellipsoid_embedding:
+                head_in += self.param_dim
+            if self.use_context_embedding:
+                head_in += self.context_feat_dim
         else:
             self.context_mlp = None
             self.shared_fusion = None
             self.adapter = None
             self.gate_head = None
-            head_in = 96 * 4 * 4 + 64
+            head_in = 0
+            if self.use_patch_embedding:
+                head_in += self.patch_dim
+            if self.use_ellipsoid_embedding:
+                head_in += self.param_dim
         self.head = nn.Sequential(
             nn.Linear(head_in, 256),
             nn.GELU(),
@@ -102,22 +140,49 @@ class RefinementNet(nn.Module):
     def forward(self, patch: torch.Tensor, init_params: torch.Tensor, context: torch.Tensor | None = None):
         feat = self.backbone(patch)
         param_feat = self.param_mlp(init_params)
+        if not self.use_patch_embedding:
+            feat = torch.zeros_like(feat)
+        if not self.use_ellipsoid_embedding:
+            param_feat = torch.zeros_like(param_feat)
         if self.use_adapter:
             if context is None:
                 raise ValueError("context is required when use_adapter=True")
             context_feat = self.context_mlp(context)
-            fused = self.shared_fusion(torch.cat([feat, param_feat, context_feat], dim=1))
-            gate = 1.0 + 0.15 * self.adapter(fused)
-            feat = feat * gate
-            param_gate = torch.sigmoid(self.gate_head(fused))
-            head_input = torch.cat([feat, param_feat, context_feat, fused], dim=1)
+            if not self.use_context_embedding:
+                context_feat = torch.zeros_like(context_feat)
+            fusion_inputs = []
+            if self.use_patch_embedding:
+                fusion_inputs.append(feat)
+            if self.use_ellipsoid_embedding:
+                fusion_inputs.append(param_feat)
+            if self.use_context_embedding:
+                fusion_inputs.append(context_feat)
+            fused = self.shared_fusion(torch.cat(fusion_inputs, dim=1))
+            if self.use_patch_embedding:
+                feature_gate = 1.0 + 0.15 * self.adapter(fused)
+                feat = feat * feature_gate
+            if self.use_param_gate:
+                param_gate = torch.sigmoid(self.gate_head(fused))
+            else:
+                param_gate = torch.ones_like(init_params)
+            head_inputs = []
+            if self.use_patch_embedding:
+                head_inputs.append(feat)
+            if self.use_ellipsoid_embedding:
+                head_inputs.append(param_feat)
+            if self.use_context_embedding:
+                head_inputs.append(context_feat)
+            head_inputs.append(fused)
+            head_input = torch.cat(head_inputs, dim=1)
         else:
-            head_input = torch.cat([feat, param_feat], dim=1)
-            param_gate = None
+            head_inputs = []
+            if self.use_patch_embedding:
+                head_inputs.append(feat)
+            if self.use_ellipsoid_embedding:
+                head_inputs.append(param_feat)
+            head_input = torch.cat(head_inputs, dim=1)
+            param_gate = torch.ones_like(init_params)
         delta = self.head(head_input)
-
-        if param_gate is None:
-            param_gate = torch.ones_like(delta)
 
         delta_mu_t = torch.tanh(delta[:, 0]) * self.max_delta_mu_t * param_gate[:, 0]
         delta_mu_f = torch.tanh(delta[:, 1]) * self.max_delta_mu_f * param_gate[:, 1]
@@ -137,7 +202,7 @@ class RefinementNet(nn.Module):
             ],
             dim=1,
         )
-        extra = {"raw_delta": delta, "param_gate": param_gate} if self.use_adapter else {"raw_delta": delta}
+        extra = {"raw_delta": delta, "param_gate": param_gate}
         return refined, extra
 
 
